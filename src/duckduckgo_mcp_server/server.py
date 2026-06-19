@@ -465,6 +465,23 @@ def main():
         default=None,
         help="Bind port for sse / streamable-http transports (default: 8000).",
     )
+    parser.add_argument(
+        "--allowed-origins",
+        nargs="*",
+        default=None,
+        help="Additional allowed origins for HTTP/SSE transport (e.g. https://domain.com:8080).",
+    )
+    parser.add_argument(
+        "--allowed-hosts",
+        nargs="*",
+        default=None,
+        help="Additional allowed hosts for HTTP/SSE transport (e.g. domain.com:8080).",
+    )
+    parser.add_argument(
+        "--disable-dns-rebinding-protection",
+        action="store_true",
+        help="Disable DNS rebinding protection (not recommended for production).",
+    )
     args = parser.parse_args()
 
     transports = set(args.transport)
@@ -472,8 +489,17 @@ def main():
     if "stdio" in transports and len(transports) > 1:
         parser.error("Cannot mix stdio with HTTP transports")
 
-    if transports == {"stdio"} and (args.host is not None or args.port is not None):
-        parser.error("--host / --port are only valid with --transport sse or streamable-http")
+    if transports == {"stdio"} and (
+        args.host is not None
+        or args.port is not None
+        or args.allowed_origins is not None
+        or args.allowed_hosts is not None
+        or args.disable_dns_rebinding_protection
+    ):
+        parser.error(
+            "--host, --port, --allowed-origins, --allowed-hosts, and "
+            "--disable-dns-rebinding-protection are only valid with --transport sse or streamable-http"
+        )
 
     # Reconfigure the module-level fetcher with the chosen backend.
     fetcher = WebContentFetcher(backend=args.fetch_backend)
@@ -486,6 +512,40 @@ def main():
         port = args.port or 8000
         mcp.settings.host = host
         mcp.settings.port = port
+
+        # Read environment variables for transport security settings
+        env_origins = os.getenv("DDG_ALLOWED_ORIGINS")
+        env_hosts = os.getenv("DDG_ALLOWED_HOSTS")
+        env_disable = os.getenv("DDG_DISABLE_DNS_REBINDING_PROTECTION", "").lower() in ("true", "1", "yes")
+
+        disable_dns_rebinding = args.disable_dns_rebinding_protection or env_disable
+
+        allowed_origins = []
+        if env_origins:
+            allowed_origins.extend([o.strip() for o in env_origins.split(",") if o.strip()])
+        if args.allowed_origins:
+            allowed_origins.extend(args.allowed_origins)
+
+        allowed_hosts = []
+        if env_hosts:
+            allowed_hosts.extend([h.strip() for h in env_hosts.split(",") if h.strip()])
+        if args.allowed_hosts:
+            allowed_hosts.extend(args.allowed_hosts)
+
+        if disable_dns_rebinding:
+            mcp.settings.transport_security = None
+        elif allowed_origins or allowed_hosts:
+            from mcp.server.transport_security import TransportSecuritySettings
+            if mcp.settings.transport_security is None:
+                mcp.settings.transport_security = TransportSecuritySettings(
+                    enable_dns_rebinding_protection=True,
+                    allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+                    allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+                )
+            if allowed_origins:
+                mcp.settings.transport_security.allowed_origins.extend(allowed_origins)
+            if allowed_hosts:
+                mcp.settings.transport_security.allowed_hosts.extend(allowed_hosts)
 
         # SSE and Streamable HTTP app setup
         sse_app = mcp.sse_app()

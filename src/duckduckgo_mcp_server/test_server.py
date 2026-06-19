@@ -693,6 +693,59 @@ class TestMainCliArgs(unittest.TestCase):
             self.assertEqual(call_kwargs["host"], "127.0.0.1")
             self.assertEqual(call_kwargs["port"], 8000)
 
+    def test_main_disables_dns_rebinding_protection(self):
+        argv = ["duckduckgo-mcp-server", "--transport", "streamable-http", "--disable-dns-rebinding-protection"]
+        with patch.object(sys, "argv", argv), \
+             patch("duckduckgo_mcp_server.server.mcp") as mock_mcp, \
+             patch("uvicorn.run"):
+            _setup_mock_mcp_for_http(mock_mcp)
+            duckduckgo_mcp_server.server.main()
+            self.assertIsNone(mock_mcp.settings.transport_security)
+
+    def test_main_adds_allowed_origins_and_hosts(self):
+        argv = [
+            "duckduckgo-mcp-server",
+            "--transport", "streamable-http",
+            "--allowed-origins", "https://origin1.com", "https://origin2.com",
+            "--allowed-hosts", "host1.com", "host2.com",
+        ]
+        with patch.object(sys, "argv", argv), \
+             patch("duckduckgo_mcp_server.server.mcp") as mock_mcp, \
+             patch("uvicorn.run"):
+            _setup_mock_mcp_for_http(mock_mcp)
+            # Make sure it treats settings.transport_security as None initially,
+            # so it instantiates a real TransportSecuritySettings object
+            mock_mcp.settings.transport_security = None
+            duckduckgo_mcp_server.server.main()
+
+            ts_settings = mock_mcp.settings.transport_security
+            self.assertIsNotNone(ts_settings)
+            self.assertIn("https://origin1.com", ts_settings.allowed_origins)
+            self.assertIn("https://origin2.com", ts_settings.allowed_origins)
+            self.assertIn("host1.com", ts_settings.allowed_hosts)
+            self.assertIn("host2.com", ts_settings.allowed_hosts)
+
+    def test_main_adds_allowed_origins_and_hosts_from_env(self):
+        argv = ["duckduckgo-mcp-server", "--transport", "streamable-http"]
+        env_vars = {
+            "DDG_ALLOWED_ORIGINS": "https://env-origin1.com, https://env-origin2.com",
+            "DDG_ALLOWED_HOSTS": "env-host1.com, env-host2.com",
+        }
+        with patch.dict("os.environ", env_vars), \
+             patch.object(sys, "argv", argv), \
+             patch("duckduckgo_mcp_server.server.mcp") as mock_mcp, \
+             patch("uvicorn.run"):
+            _setup_mock_mcp_for_http(mock_mcp)
+            mock_mcp.settings.transport_security = None
+            duckduckgo_mcp_server.server.main()
+
+            ts_settings = mock_mcp.settings.transport_security
+            self.assertIsNotNone(ts_settings)
+            self.assertIn("https://env-origin1.com", ts_settings.allowed_origins)
+            self.assertIn("https://env-origin2.com", ts_settings.allowed_origins)
+            self.assertIn("env-host1.com", ts_settings.allowed_hosts)
+            self.assertIn("env-host2.com", ts_settings.allowed_hosts)
+
 
 class TestConfiguration(unittest.TestCase):
     def test_safe_search_enum_values(self):
